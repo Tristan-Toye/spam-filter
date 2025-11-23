@@ -46,11 +46,11 @@ std::vector<Email> load_emails(int seed) {
 
     // Update these paths to your setup
     // Data can be found on the departmental computers in /cw/bdap/assignment1
-    load_emails(emails, "data/Enron.txt");
-    load_emails(emails, "data/SpamAssasin.txt");
-    load_emails(emails, "data/Trec2005.txt");
-    load_emails(emails, "data/Trec2006.txt");
-    load_emails(emails, "data/Trec2007.txt");
+    load_emails(emails, "C:\\Users\\trist\\OneDrive\\1_files\\2025_2026\\big data\\1-spam_filter\\src\\data\\Enron.txt");
+    load_emails(emails, "C:\\Users\\trist\\OneDrive\\1_files\\2025_2026\\big data\\1-spam_filter\\src\\data\\SpamAssasin.txt");
+    load_emails(emails, "C:\\Users\\trist\\OneDrive\\1_files\\2025_2026\\big data\\1-spam_filter\\src\\data\\Trec2005.txt");
+    load_emails(emails, "C:\\Users\\trist\\OneDrive\\1_files\\2025_2026\\big data\\1-spam_filter\\src\\data\\Trec2006.txt");
+    load_emails(emails, "C:\\Users\\trist\\OneDrive\\1_files\\2025_2026\\big data\\1-spam_filter\\src\\data\\Trec2007.txt");
 
     // Shuffle the emails
     std::default_random_engine g(seed);
@@ -83,11 +83,384 @@ stream_emails(const std::vector<Email> &emails,
     return metric_values;
 }
 
+/**
+ * Enhanced version that returns all metrics from ConfusionMetrics.
+ * Returns vector of MetricResults structs containing all metrics.
+ */
+template <typename Clf>
+std::vector<ConfusionMetrics::MetricResults> 
+stream_emails(const std::vector<Email> &emails,
+                           Clf& clf, int window) {
+    std::vector<ConfusionMetrics::MetricResults> all_metrics;
+    ConfusionMetrics metric;
+    
+    for (size_t i = 0; i < emails.size(); i+=window) {
+        for (size_t u = 0; u < window && i+u < emails.size(); ++u)
+            metric.evaluate(clf, emails[i+u]);
+
+        ConfusionMetrics::MetricResults results = metric.get_score();
+        all_metrics.push_back(results);
+
+        for (size_t u = 0; u < window && i+u < emails.size(); ++u)
+            clf.update(emails[i+u]);
+    }
+    return all_metrics;
+}
+
+void experiment1_learning_curves(const std::vector<Email>& emails) {
+    std::cout << "\n=== EXPERIMENT 1: Learning Curves ===" << std::endl;
+    
+    std::vector<int> window_sizes {200, 500, 1000, 2000};
+    std::ofstream lc_out("learning_curves.csv");
+    lc_out << "classifier,window,ngram,log_buckets,num_hashes,step,num_examples,"
+           << "accuracy,precision,recall,f1,fpr,fnr" << '\n';
+    int ngram = 2;
+    int log_buckets = 14;
+    int num_hashes = 3;
+
+    // Feature Hashing learning curves
+    for (int ws : window_sizes) {
+
+        NaiveBayesFeatureHashing fh_clf(ngram, log_buckets);  // good defaults
+        std::vector<ConfusionMetrics::MetricResults> fh_curve = stream_emails(emails, fh_clf, ws);
+        
+        // Write results for each step
+        for (size_t step = 0; step < fh_curve.size(); ++step) {
+            size_t num_ex = std::min(static_cast<size_t>((step+1)*ws), emails.size());
+            
+            
+            ConfusionMetrics::MetricResults results = fh_curve[step];
+            
+            lc_out << "FeatureHashing," << ws << "," << ngram << "," << log_buckets << ",1," << step << "," << num_ex << ","
+                   << results.accuracy << ","
+                   << results.precision << ","
+                   << results.recall << ","
+                   << results.f1 << ","
+                   << results.fpr << ","
+                   << results.fnr << '\n';
+        }
+        std::cout << "FH learning curve window=" << ws << " complete" << std::endl;
+        std::cout << "FH parameters: ngram=" << ngram << ", log_buckets=" << log_buckets << std::endl;
+        ConfusionMetrics::MetricResults results = fh_curve.back();
+        std::cout << "FH last step results: " << std::endl
+                  << "Accuracy: " << results.accuracy << std::endl
+                  << "Precision: " << results.precision << std::endl
+                  << "Recall: " << results.recall << std::endl
+                  << "F1: " << results.f1 << std::endl
+                  << "FPR: " << results.fpr << std::endl
+                  << "FNR: " << results.fnr << std::endl;
+    }
+    
+    // Count-Min learning curves
+    for (int ws : window_sizes) {
+        NaiveBayesCountMin cm_clf(ngram, num_hashes, log_buckets);  // good defaults
+        std::vector<ConfusionMetrics::MetricResults> cm_curve = stream_emails(emails, cm_clf, ws);
+        
+        // Write results for each step
+        for (size_t step = 0; step < cm_curve.size(); ++step) {
+            size_t num_ex = std::min(static_cast<size_t>((step+1)*ws), emails.size());
+            
+            ConfusionMetrics::MetricResults results = cm_curve[step];
+            
+            lc_out << "CountMin," << ws << "," << ngram << "," << log_buckets << "," << num_hashes << "," << step << "," << num_ex << ","
+                   << results.accuracy << ","
+                   << results.precision << ","
+                   << results.recall << ","
+                   << results.f1 << ","
+                   << results.fpr << ","
+                   << results.fnr << '\n';
+
+        }
+        std::cout << "CM learning curve window=" << ws << " complete" << std::endl;
+        std::cout << "CM parameters: ngram=" << ngram << ", num_hashes=" << num_hashes << ", log_buckets=" << log_buckets << std::endl;
+        ConfusionMetrics::MetricResults results = cm_curve.back();
+        std::cout << "CM last step results: " << std::endl
+                  << "Accuracy: " << results.accuracy << std::endl
+                  << "Precision: " << results.precision << std::endl
+                  << "Recall: " << results.recall << std::endl
+                  << "F1: " << results.f1 << std::endl
+                  << "FPR: " << results.fpr << std::endl
+                  << "FNR: " << results.fnr << std::endl;
+    }
+    
+    lc_out.close();
+    std::cout << "Wrote learning curves to learning_curves.csv" << std::endl;
+}
+
+void experiment2_hyperparameter_grid_search(const std::vector<Email>& emails) {
+    std::cout << "\n=== EXPERIMENT 2: Hyperparameter Grid Search ===" << std::endl;
+    
+    std::vector<int> ngrams {1, 2, 3};
+    std::vector<int> log_buckets {10, 12, 14, 16};
+    std::vector<int> cm_num_hashes {2, 3, 4};
+    int ws = 200;
+    
+    std::ofstream hyper_out("hyperparameter_results.csv");
+    hyper_out << "classifier,ngram,log_buckets,num_hashes,num_examples,"
+              << "accuracy,precision,recall,f1,fpr,fnr" << '\n';
+    
+    // Feature Hashing grid search
+    for (int ng : ngrams) {
+        for (int lb : log_buckets) {
+            NaiveBayesFeatureHashing clf(ng, lb);
+            
+            std::vector<ConfusionMetrics::MetricResults> fh_curve = stream_emails(emails, clf, ws);
+
+            for (size_t step = 0; step < fh_curve.size(); ++step) {
+                size_t num_ex = std::min(static_cast<size_t>((step+1)*ws), emails.size());
+                ConfusionMetrics::MetricResults results = fh_curve[step];
+                hyper_out << "FeatureHashing," << ng << "," << lb << ",0,"
+                         << results.accuracy << ","
+                         << results.precision << ","
+                         << results.recall << ","
+                         << results.f1 << ","
+                         << results.fpr << ","
+                         << results.fnr << '\n';
+            }
+            ConfusionMetrics::MetricResults results = fh_curve.back();
+            std::cout << "FH ngram=" << ng << " log_buckets=" << lb
+                     << " precision=" << results.precision
+                     << " recall=" << results.recall    
+                     << " f1=" << results.f1 << std::endl;
+        }
+    }
+    
+    // Count-Min grid search
+    for (int ng : ngrams) {
+        for (int nh : cm_num_hashes) {
+            for (int lb : log_buckets) {
+                NaiveBayesCountMin clf(ng, nh, lb);
+                std::vector<ConfusionMetrics::MetricResults> cm_curve = stream_emails(emails, clf, ws);
+                
+                for (size_t step = 0; step < cm_curve.size(); ++step) {
+                    size_t num_ex = std::min(static_cast<size_t>((step+1)*ws), emails.size());
+                    
+                    ConfusionMetrics::MetricResults results = cm_curve[step];
+                    hyper_out << "CountMin," << ng << "," << lb << "," << nh << "," << num_ex << ","
+                             << results.accuracy << ","
+                             << results.precision << ","
+                             << results.recall << ","
+                             << results.f1 << ","
+                             << results.fpr << ","
+                             << results.fnr << '\n';
+
+                   
+                    }
+                ConfusionMetrics::MetricResults results = cm_curve.back();
+                std::cout << "CM ngram=" << ng << " num_hashes=" << nh << " log_buckets=" << lb
+                         << " precision=" << results.precision
+                         << " recall=" << results.recall    
+                         << " f1=" << results.f1 << std::endl;
+            }
+        }
+    }
+    
+    hyper_out.close();
+    std::cout << "Wrote hyperparameter results to hyperparameter_results.csv" << std::endl;
+}
+
+void experiment3_pr_curve(const std::vector<Email>& emails) {
+    std::cout << "\n=== EXPERIMENT 3: PR Curve for Threshold Selection ===" << std::endl;
+    
+    std::ofstream pr_out("pr_curve.csv");
+    pr_out << "classifier,ngram,log_buckets,num_hashes,threshold,tp,fp,tn,fn,"
+           << "precision,recall,f1,accuracy" << '\n';
+    
+    // Feature Hashing PR curve
+    {
+        int ngram = 2;
+        int log_num_buckets = 14;
+        
+        std::cout << "Training Feature Hashing (ngram=" << ngram 
+                  << ", log_buckets=" << log_num_buckets << ")..." << std::endl;
+        
+        NaiveBayesFeatureHashing clf(ngram, log_num_buckets);
+        std::vector<std::pair<double, bool>> predictions;
+        predictions.reserve(emails.size());
+        
+        for (const Email& email : emails) {
+            double score = clf.predict(email);
+            predictions.emplace_back(score, email.is_spam());
+            clf.update(email);
+        }
+        
+        // Sort predictions by score (descending)
+        std::sort(predictions.begin(), predictions.end(), 
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
+        
+        std::cout << "Evaluating PR curve at " << predictions.size() << " threshold points..." << std::endl;
+        
+        // Start with threshold = infinity (all predicted as negative)
+        int total_positives = 0;
+        int total_negatives = 0;
+        for (const auto& pred : predictions) {
+            if (pred.second) ++total_positives;
+            else ++total_negatives;
+        }
+        
+        int tp = 0, fp = 0;
+        
+        for (size_t i = 0; i < predictions.size(); ++i) {
+            double threshold = predictions[i].first;
+            bool actual_spam = predictions[i].second;
+            
+            // Update counts for this prediction being classified as positive
+            if (actual_spam) ++tp;
+            else ++fp;
+            
+            int fn = total_positives - tp;
+            int tn = total_negatives - fp;
+            
+            // Only write when label changes or at boundaries
+            if (i == predictions.size() - 1 || i == 0 || actual_spam != predictions[i+1].second) {
+                double precision = (tp + fp == 0) ? 1.0 : static_cast<double>(tp) / (tp + fp);
+                double recall = (tp + fn == 0) ? 1.0 : static_cast<double>(tp) / (tp + fn);
+                double f1 = (precision + recall == 0) ? 0.0 : 2.0 * precision * recall / (precision + recall);
+                double accuracy = static_cast<double>(tp + tn) / (tp + fp + tn + fn);
+                
+                pr_out << "FeatureHashing," << ngram << "," << log_num_buckets << ",0," << threshold << ","
+                       << tp << "," << fp << "," << tn << "," << fn << ","
+                       << precision << "," << recall << "," << f1 << "," << accuracy << '\n';
+            }
+        }
+        
+        std::cout << "Feature Hashing PR curve complete" << std::endl;
+    }
+    
+    // Count-Min PR curve
+    {
+        int ngram = 2;
+        int num_hashes = 3;
+        int log_num_buckets = 14;
+        
+        std::cout << "Training Count-Min (ngram=" << ngram << ", num_hashes=" << num_hashes
+                  << ", log_buckets=" << log_num_buckets << ")..." << std::endl;
+        
+        NaiveBayesCountMin clf(ngram, num_hashes, log_num_buckets);
+        std::vector<std::pair<double, bool>> predictions;
+        predictions.reserve(emails.size());
+        
+        for (const Email& email : emails) {
+            double score = clf.predict(email);
+            predictions.emplace_back(score, email.is_spam());
+            clf.update(email);
+        }
+        
+        // Sort predictions by score (descending)
+        std::sort(predictions.begin(), predictions.end(),
+                  [](const auto& a, const auto& b) { return a.first > b.first; });
+        
+        std::cout << "Evaluating PR curve at " << predictions.size() << " threshold points..." << std::endl;
+        
+        // Start with threshold = infinity (all predicted as negative)
+        int total_positives = 0;
+        int total_negatives = 0;
+        for (const auto& pred : predictions) {
+            if (pred.second) ++total_positives;
+            else ++total_negatives;
+        }
+        
+        int tp = 0, fp = 0;
+        
+        for (size_t i = 0; i < predictions.size(); ++i) {
+            double threshold = predictions[i].first;
+            bool actual_spam = predictions[i].second;
+            
+            // Update counts for this prediction being classified as positive
+            if (actual_spam) ++tp;
+            else ++fp;
+            
+            int fn = total_positives - tp;
+            int tn = total_negatives - fp;
+            
+            // Only write when label changes or at boundaries
+            if (i == predictions.size() - 1 || i == 0 || actual_spam != predictions[i+1].second) {
+                double precision = (tp + fp == 0) ? 1.0 : static_cast<double>(tp) / (tp + fp);
+                double recall = (tp + fn == 0) ? 1.0 : static_cast<double>(tp) / (tp + fn);
+                double f1 = (precision + recall == 0) ? 0.0 : 2.0 * precision * recall / (precision + recall);
+                double accuracy = static_cast<double>(tp + tn) / (tp + fp + tn + fn);
+                
+                pr_out << "CountMin," << ngram << "," << log_num_buckets << "," << num_hashes << "," << threshold << ","
+                       << tp << "," << fp << "," << tn << "," << fn << ","
+                       << precision << "," << recall << "," << f1 << "," << accuracy << '\n';
+            }
+        }
+        
+        std::cout << "Count-Min PR curve complete" << std::endl;
+    }
+    
+    pr_out.close();
+    std::cout << "Wrote PR curve data to pr_curve.csv" << std::endl;
+}
+
+void experiment4_computational_efficiency(const std::vector<Email>& emails) {
+    std::cout << "\n=== EXPERIMENT 4: Computational Efficiency ===" << std::endl;
+    
+    std::vector<int> ngrams {1, 2, 3};
+    std::vector<int> log_buckets {10, 12, 14, 16};
+    std::vector<int> cm_num_hashes {2, 3, 4};
+    int ws = 200;
+    
+    std::ofstream timing_out("timing_results.csv");
+    timing_out << "classifier,ngram,log_buckets,num_hashes,total_time_s,time_per_email_ms" << '\n';
+    
+    // Feature Hashing timing
+    for (int ng : ngrams) {
+        for (int lb : log_buckets) {
+            NaiveBayesFeatureHashing clf(ng, lb);
+            Accuracy metric;
+            
+            auto start = steady_clock::now();
+            stream_emails(emails, clf, metric, ws);
+            auto end = steady_clock::now();
+            
+            double total_time = duration_cast<milliseconds>(end - start).count() / 1000.0;
+            double time_per_email = (total_time * 1000.0) / emails.size();
+            
+            timing_out << "FeatureHashing," << ng << "," << lb << ",0,"
+                      << total_time << "," << time_per_email << '\n';
+            
+            std::cout << "FH timing ngram=" << ng << " log_buckets=" << lb
+                     << " time=" << total_time << "s" << std::endl;
+        }
+    }
+    
+    // Count-Min timing
+    for (int ng : ngrams) {
+        for (int nh : cm_num_hashes) {
+            for (int lb : log_buckets) {
+                NaiveBayesCountMin clf(ng, nh, lb);
+                Accuracy metric;
+                
+                auto start = steady_clock::now();
+                stream_emails(emails, clf, metric, ws);
+                auto end = steady_clock::now();
+                
+                double total_time = duration_cast<milliseconds>(end - start).count() / 1000.0;
+                double time_per_email = (total_time * 1000.0) / emails.size();
+                
+                timing_out << "CountMin," << ng << "," << lb << "," << nh << ","
+                          << total_time << "," << time_per_email << '\n';
+                
+                std::cout << "CM timing ngram=" << ng << " num_hashes=" << nh << " log_buckets=" << lb
+                         << " time=" << total_time << "s" << std::endl;
+            }
+        }
+    }
+    
+    timing_out.close();
+    std::cout << "Wrote timing results to timing_results.csv" << std::endl;
+}
+
 int main(int argc, char *argv[]) { 
     // The arguments can be used for your experiments, specify the correct command(s) in your script.sh
 
     // Example on how to load the data + statistics on spam/ham
     int seed = 12;
+    if (argc > 1) {
+        try { seed = std::stoi(argv[1]); } catch (...) {}
+    }
+    
     std::vector<Email> emails = load_emails(seed);
     std::cout << "#emails: " << emails.size() << std::endl;
     size_t num_spam = 0;
@@ -97,22 +470,13 @@ int main(int argc, char *argv[]) {
               << (100.0 * num_spam / emails.size()) << "%"
               << std::endl;
 
-    // TODO: implement your experiments, write the results to one or more file(s)
-
-    // // Example use:
-    // // Given an instantiated classifier clf, you can evaluate a single email as follows:
-
-    // Email email1("EMAIL> label=1", "free try now lot money king rich");
+    // Run all experiments
+    experiment1_learning_curves(emails);
+    experiment2_hyperparameter_grid_search(emails);
+    experiment3_pr_curve(emails);
+    experiment4_computational_efficiency(emails);
     
-    // auto classify = [&clf](const Email& m, const char *name) {
-    //     std::cout << "classify(" << name << "): soft label="
-    //         << clf.predict(m)
-    //         << ", hard label="
-    //         << (clf.classify(m) ? "spam" : "ham")
-    //         << std::endl;
-    // };
-
-    // classify(email1, "email1");
+    std::cout << "\n=== ALL EXPERIMENTS COMPLETE ===" << std::endl;
 
     return 0;
 }

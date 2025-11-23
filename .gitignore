@@ -1,0 +1,18 @@
+# Data folder
+data/
+**/data/
+
+# Build folder
+build/
+**/build/
+Build/
+**/Build/
+
+# PDF files
+*.pdf
+**/*.pdf
+
+# Zip files
+*.zip
+**/*.zip
+
