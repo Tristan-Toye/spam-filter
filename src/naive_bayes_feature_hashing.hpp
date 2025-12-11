@@ -32,8 +32,8 @@ private:
 
 public:
     /** Do not change the signature of the constructor! */
-    NaiveBayesFeatureHashing(int ngram, int log_num_buckets)
-        : BaseClf(0.5)  // threshold for P(spam|email) > 0.5
+    NaiveBayesFeatureHashing(int ngram, int log_num_buckets, double threshold = 0.5)
+        : BaseClf(threshold)  // threshold for P(spam|email) > threshold
         , seed_(0xfa4f8cc)
         , ngram_(ngram)
         , log_num_buckets_(log_num_buckets)

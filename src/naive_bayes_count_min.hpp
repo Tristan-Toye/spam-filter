@@ -31,8 +31,8 @@ private:
     int total_ham_ngrams_;
 
 public:
-    NaiveBayesCountMin(int ngram, int num_hashes, int log_num_buckets)
-        : BaseClf(0.5)  // threshold for P(spam|email) > 0.5
+    NaiveBayesCountMin(int ngram, int num_hashes, int log_num_buckets, double threshold = 0.5)
+        : BaseClf(threshold)  // threshold for P(spam|email) > threshold
         , ngram_(ngram)
         , num_hashes_(num_hashes)
         , num_buckets_(static_cast<size_t>(1ULL << log_num_buckets))  // 2^log_num_buckets
