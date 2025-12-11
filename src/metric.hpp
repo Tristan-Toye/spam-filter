@@ -9,10 +9,10 @@ namespace bdap {
     // CVMetrics: Result struct for threshold-sweep metrics (ROC/AUC analysis)
     // =============================================================================
     struct CVMetrics {
-        static constexpr int NUM_METRICS = 5;
+        static constexpr int NUM_METRICS = 6;
         static constexpr const char* METRIC_NAMES[NUM_METRICS] = {
             "Recall@FPR=0.01", "Recall@FPR=0.001", "AUC", 
-            "Recall@Prec=0.99", "Recall@Prec=0.95"
+            "Recall@Prec=0.99", "Recall@Prec=0.95", "BrierScore"
         };
 
         double recall_at_fpr_001 = 0.0;   // Recall @ FPR = 1%
@@ -20,8 +20,10 @@ namespace bdap {
         double auc = 0.0;                 // Area Under ROC Curve
         double recall_at_prec_99 = 0.0;   // Best Recall where Precision >= 99%
         double recall_at_prec_95 = 0.0;   // Best Recall where Precision >= 95%
+        double brier_score = 1.0;         // Brier score (lower is better, 0 = perfect)
 
         // Indexed access to metrics (for loops/generic code)
+        // Note: For Brier score, we return (1 - brier) so higher is better like other metrics
         double get_metric(int idx) const {
             switch (idx) {
                 case 0: return recall_at_fpr_001;
@@ -29,6 +31,7 @@ namespace bdap {
                 case 2: return auc;
                 case 3: return recall_at_prec_99;
                 case 4: return recall_at_prec_95;
+                case 5: return 1.0 - brier_score;  // Invert so higher is better
                 default: return 0.0;
             }
         }
@@ -56,6 +59,16 @@ namespace bdap {
         CVMetrics get_cv_metrics() const {
             CVMetrics metrics;
             if (predictions.empty()) return metrics;
+            
+            // Compute Brier score from raw predictions (before sorting)
+            // Brier = (1/N) * sum((predicted - actual)^2)
+            double brier_sum = 0.0;
+            for (const auto& [prob, is_spam] : predictions) {
+                double actual = is_spam ? 1.0 : 0.0;
+                double diff = prob - actual;
+                brier_sum += diff * diff;
+            }
+            metrics.brier_score = brier_sum / predictions.size();
             
             std::vector<std::pair<double, bool>> sorted_preds = get_sorted_predictions();
             auto [total_pos, total_neg] = count_classes(sorted_preds);

@@ -480,7 +480,7 @@ std::vector<ParameterResult> cross_validation(
     
     std::ofstream cv_out("cv_results.csv");
     cv_out << "classifier,ngram,log_buckets,num_hashes,fold,"
-           << "recall_at_fpr_001,recall_at_fpr_0001,auc,recall_at_prec_99,recall_at_prec_95" << '\n';
+           << "recall_at_fpr_001,recall_at_fpr_0001,auc,recall_at_prec_99,recall_at_prec_95,brier_score" << '\n';
     
     // Feature Hashing CV
     std::cout << "\nFeature Hashing cross-validation..." << std::endl;
@@ -513,13 +513,15 @@ std::vector<ParameterResult> cross_validation(
                 sum_metrics.auc += fold_metrics.auc;
                 sum_metrics.recall_at_prec_99 += fold_metrics.recall_at_prec_99;
                 sum_metrics.recall_at_prec_95 += fold_metrics.recall_at_prec_95;
+                sum_metrics.brier_score += fold_metrics.brier_score;
                 
                 cv_out << "FeatureHashing," << ng << "," << lb << ",0," << fold << ","
                        << fold_metrics.recall_at_fpr_001 << ","
                        << fold_metrics.recall_at_fpr_0001 << ","
                        << fold_metrics.auc << ","
                        << fold_metrics.recall_at_prec_99 << ","
-                       << fold_metrics.recall_at_prec_95 << '\n';
+                       << fold_metrics.recall_at_prec_95 << ","
+                       << fold_metrics.brier_score << '\n';
             }
             
             // Average across folds
@@ -528,6 +530,7 @@ std::vector<ParameterResult> cross_validation(
             result.avg_metrics.auc = sum_metrics.auc / k_folds;
             result.avg_metrics.recall_at_prec_99 = sum_metrics.recall_at_prec_99 / k_folds;
             result.avg_metrics.recall_at_prec_95 = sum_metrics.recall_at_prec_95 / k_folds;
+            result.avg_metrics.brier_score = sum_metrics.brier_score / k_folds;
             
             all_results.push_back(result);
             
@@ -572,13 +575,15 @@ std::vector<ParameterResult> cross_validation(
                     sum_metrics.auc += fold_metrics.auc;
                     sum_metrics.recall_at_prec_99 += fold_metrics.recall_at_prec_99;
                     sum_metrics.recall_at_prec_95 += fold_metrics.recall_at_prec_95;
+                    sum_metrics.brier_score += fold_metrics.brier_score;
                     
                     cv_out << "CountMin," << ng << "," << lb << "," << nh << "," << fold << ","
                            << fold_metrics.recall_at_fpr_001 << ","
                            << fold_metrics.recall_at_fpr_0001 << ","
                            << fold_metrics.auc << ","
                            << fold_metrics.recall_at_prec_99 << ","
-                           << fold_metrics.recall_at_prec_95 << '\n';
+                           << fold_metrics.recall_at_prec_95 << ","
+                           << fold_metrics.brier_score << '\n';
                 }
                 
                 // Average across folds
@@ -587,6 +592,7 @@ std::vector<ParameterResult> cross_validation(
                 result.avg_metrics.auc = sum_metrics.auc / k_folds;
                 result.avg_metrics.recall_at_prec_99 = sum_metrics.recall_at_prec_99 / k_folds;
                 result.avg_metrics.recall_at_prec_95 = sum_metrics.recall_at_prec_95 / k_folds;
+                result.avg_metrics.brier_score = sum_metrics.brier_score / k_folds;
                 
                 all_results.push_back(result);
                 
@@ -1047,6 +1053,140 @@ void experiment_computational_efficiency(const std::vector<Email>& emails) {
     std::cout << "Wrote timing results to timing_results.csv" << std::endl;
 }
 
+void experiment_parameter_sweep(const std::vector<Email>& emails) {
+    std::cout << "\n=== PARAMETER SWEEP EXPERIMENT ===" << std::endl;
+    std::cout << "Sweeping all parameter combinations and recording metrics..." << std::endl;
+    
+    std::ofstream out("parameter_sweep.csv");
+    out << "classifier,ngram,log_buckets,num_hashes,precision,recall,f1,f05,accuracy,fpr,fnr" << '\n';
+    
+    std::vector<int> ngrams {1, 2, 3};
+    std::vector<int> log_buckets {10, 12, 14, 16, 18, 20};
+    std::vector<int> cm_num_hashes {2, 3, 4, 5};
+    
+    // Feature Hashing sweep
+    std::cout << "Feature Hashing sweep..." << std::endl;
+    for (int ng : ngrams) {
+        for (int lb : log_buckets) {
+            NaiveBayesFeatureHashing clf(ng, lb);
+            auto results = stream_emails(emails, clf, 1);
+            const auto& r = results.back();
+            
+            out << "FeatureHashing," << ng << "," << lb << ",0,"
+                << r.precision << "," << r.recall << "," << r.f1 << ","
+                << r.f05 << "," << r.accuracy << "," << r.fpr << "," << r.fnr << '\n';
+            
+            std::cout << "  FH ng=" << ng << " lb=" << lb 
+                      << " F0.5=" << r.f05 << " P=" << r.precision << " R=" << r.recall << std::endl;
+        }
+    }
+    
+    // Count-Min sweep
+    std::cout << "Count-Min sweep..." << std::endl;
+    for (int ng : ngrams) {
+        for (int nh : cm_num_hashes) {
+            for (int lb : log_buckets) {
+                NaiveBayesCountMin clf(ng, nh, lb);
+                auto results = stream_emails(emails, clf, 1);
+                const auto& r = results.back();
+                
+                out << "CountMin," << ng << "," << lb << "," << nh << ","
+                    << r.precision << "," << r.recall << "," << r.f1 << ","
+                    << r.f05 << "," << r.accuracy << "," << r.fpr << "," << r.fnr << '\n';
+                
+                std::cout << "  CM ng=" << ng << " nh=" << nh << " lb=" << lb
+                          << " F0.5=" << r.f05 << " P=" << r.precision << " R=" << r.recall << std::endl;
+            }
+        }
+    }
+    
+    out.close();
+    std::cout << "Wrote parameter sweep results to parameter_sweep.csv" << std::endl;
+}
+
+void experiment_brier_score(const std::vector<Email>& emails, const std::vector<FinalConfig>& configs) {
+    std::cout << "\n=== BRIER SCORE EXPERIMENT ===" << std::endl;
+    std::cout << "Calculating Brier scores for " << configs.size() << " configurations..." << std::endl;
+    
+    std::ofstream out("brier_scores.csv");
+    out << "classifier,ngram,log_buckets,num_hashes,optimized_for,threshold,"
+        << "brier_score,brier_score_scaled,log_loss" << '\n';
+    
+    for (const auto& cfg : configs) {
+        double brier_sum = 0.0;
+        double log_loss_sum = 0.0;
+        size_t count = 0;
+        
+        if (cfg.classifier == "FeatureHashing") {
+            NaiveBayesFeatureHashing clf(cfg.ngram, cfg.log_buckets, cfg.best_threshold);
+            
+            for (const Email& email : emails) {
+                // Get prediction before training (online setting)
+                double prob_spam = clf.predict(email);
+                double actual = email.is_spam() ? 1.0 : 0.0;
+                
+                // Brier score component: (predicted - actual)^2
+                double diff = prob_spam - actual;
+                brier_sum += diff * diff;
+                
+                // Log loss component: -[y*log(p) + (1-y)*log(1-p)]
+                // Clamp probabilities to avoid log(0)
+                double p_clamped = std::clamp(prob_spam, 1e-15, 1.0 - 1e-15);
+                log_loss_sum += -(actual * std::log(p_clamped) + (1.0 - actual) * std::log(1.0 - p_clamped));
+                
+                count++;
+                
+                // Train on this email
+                clf.update(email);
+            }
+        } else {
+            NaiveBayesCountMin clf(cfg.ngram, cfg.num_hashes, cfg.log_buckets, cfg.best_threshold);
+            
+            for (const Email& email : emails) {
+                double prob_spam = clf.predict(email);
+                double actual = email.is_spam() ? 1.0 : 0.0;
+                
+                double diff = prob_spam - actual;
+                brier_sum += diff * diff;
+                
+                double p_clamped = std::clamp(prob_spam, 1e-15, 1.0 - 1e-15);
+                log_loss_sum += -(actual * std::log(p_clamped) + (1.0 - actual) * std::log(1.0 - p_clamped));
+                
+                count++;
+                clf.update(email);
+            }
+        }
+        
+        double brier_score = brier_sum / count;
+        // Brier Skill Score: scaled relative to climatology (baseline = proportion of spam)
+        double spam_rate = static_cast<double>(std::count_if(emails.begin(), emails.end(), 
+                          [](const Email& e) { return e.is_spam(); })) / emails.size();
+        double brier_climatology = spam_rate * (1.0 - spam_rate) + (1.0 - spam_rate) * spam_rate * spam_rate 
+                                   + spam_rate * (1.0 - spam_rate) * (1.0 - spam_rate);
+        // Actually, climatology Brier score for always predicting p_spam = spam_rate
+        brier_climatology = spam_rate * (1.0 - spam_rate) * (1.0 - spam_rate) + (1.0 - spam_rate) * spam_rate * spam_rate;
+        // Simplify: Brier_climatology = p*(1-p)^2 + (1-p)*p^2 = p*(1-p)*[(1-p) + p] = p*(1-p)
+        brier_climatology = spam_rate * (1.0 - spam_rate);
+        
+        double brier_skill = 1.0 - (brier_score / brier_climatology);
+        double log_loss = log_loss_sum / count;
+        
+        out << cfg.classifier << "," << cfg.ngram << "," << cfg.log_buckets << ","
+            << cfg.num_hashes << "," << cfg.optimized_for << "," << cfg.best_threshold << ","
+            << brier_score << "," << brier_skill << "," << log_loss << '\n';
+        
+        std::cout << cfg.classifier << " (ng=" << cfg.ngram << ", lb=" << cfg.log_buckets;
+        if (cfg.classifier == "CountMin") std::cout << ", nh=" << cfg.num_hashes;
+        std::cout << ", " << cfg.optimized_for << "):" << std::endl;
+        std::cout << "  Brier Score: " << brier_score << " (lower is better, 0 = perfect)" << std::endl;
+        std::cout << "  Brier Skill: " << brier_skill << " (higher is better, 1 = perfect vs climatology)" << std::endl;
+        std::cout << "  Log Loss: " << log_loss << " (lower is better)" << std::endl;
+    }
+    
+    out.close();
+    std::cout << "\nWrote Brier scores to brier_scores.csv" << std::endl;
+}
+
 int main(int argc, char *argv[]) { 
     // The arguments can be used for your experiments, specify the correct command(s) in your script.sh
 
@@ -1067,9 +1207,11 @@ int main(int argc, char *argv[]) {
 
     std::vector<FinalConfig> configs = experiment_parameter_search(emails, seed);
     
-    // Run computational efficiency experiment
+    // Run experiments
     experiment_learning_curves(emails, configs);
     experiment_computational_efficiency(emails);
+    experiment_parameter_sweep(emails);
+    experiment_brier_score(emails, configs);
     
     std::cout << "\n=== ALL EXPERIMENTS COMPLETE ===" << std::endl;
 

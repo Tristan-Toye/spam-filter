@@ -34,8 +34,54 @@ def _save_png(fig, name: str):
 
 
 def _save_html(fig, name: str):
-    """Save plotly figure to reports/."""
-    fig.write_html(OUTPUT_DIR / name, include_plotlyjs="cdn")
+    """Save plotly figure to reports/ with full-screen responsive layout."""
+    # Update layout for full-width, responsive sizing with proper spacing
+    fig.update_layout(
+        autosize=True,
+        margin=dict(l=60, r=60, t=80, b=60),  # Generous margins
+    )
+    
+    # Custom HTML with responsive styling
+    html_content = f'''<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{name.replace('.html', '').replace('_', ' ').title()}</title>
+    <script src="https://cdn.plot.ly/plotly-latest.min.js"></script>
+    <style>
+        * {{ margin: 0; padding: 0; box-sizing: border-box; }}
+        html, body {{ 
+            width: 100%; 
+            height: 100%; 
+            overflow-x: hidden;
+        }}
+        .plotly-graph-div {{ 
+            width: 100% !important; 
+            height: 100vh !important;
+            min-height: 700px;
+        }}
+    </style>
+</head>
+<body>
+    <div id="plotly-div"></div>
+    <script>
+        var figure = {fig.to_json()};
+        figure.layout.autosize = true;
+        figure.layout.height = null;
+        figure.layout.width = null;
+        Plotly.newPlot('plotly-div', figure.data, figure.layout, {{responsive: true}});
+        
+        // Resize handler
+        window.addEventListener('resize', function() {{
+            Plotly.Plots.resize('plotly-div');
+        }});
+    </script>
+</body>
+</html>'''
+    
+    with open(OUTPUT_DIR / name, 'w', encoding='utf-8') as f:
+        f.write(html_content)
 
 
 def _config_label(row, include_opt=True):
@@ -138,7 +184,8 @@ def plot_pr_curves_selected():
     
     # === Plotly: Interactive version ===
     fig_html = make_subplots(rows=1, cols=2,
-                             subplot_titles=["PR Curves", "F0.5 vs Threshold"])
+                             subplot_titles=["PR Curves", "F0.5 vs Threshold"],
+                             horizontal_spacing=0.1)
     
     for _, config in configs.iterrows():
         mask = True
@@ -915,13 +962,17 @@ def plot_cv_recall_at_precision():
     print(f"  Loaded {len(df)} CV data points")
     
     # Average across folds
-    agg_df = df.groupby(['classifier', 'ngram', 'log_buckets', 'num_hashes']).agg({
+    agg_cols = {
         'recall_at_prec_95': 'mean',
         'recall_at_prec_99': 'mean',
         'auc': 'mean',
         'recall_at_fpr_001': 'mean',
         'recall_at_fpr_0001': 'mean'
-    }).reset_index()
+    }
+    # Add brier_score if present in data
+    if 'brier_score' in df.columns:
+        agg_cols['brier_score'] = 'mean'
+    agg_df = df.groupby(['classifier', 'ngram', 'log_buckets', 'num_hashes']).agg(agg_cols).reset_index()
     
     # === Feature Hashing: 2D Heatmap ===
     df_fh = agg_df[agg_df['classifier'] == 'FeatureHashing']
@@ -1012,7 +1063,8 @@ def plot_cv_recall_at_precision():
     # === Combined interactive heatmap ===
     fig_html = make_subplots(
         rows=1, cols=2,
-        subplot_titles=["Feature Hashing", "Count-Min (avg across num_hashes)"]
+        subplot_titles=["Feature Hashing", "Count-Min (avg across num_hashes)"],
+        horizontal_spacing=0.12
     )
     
     if len(df_fh) > 0:
@@ -1223,7 +1275,8 @@ def plot_timing_by_dimension():
     # === Plotly interactive ===
     fig_html = make_subplots(
         rows=1, cols=3,
-        subplot_titles=["Time vs N-gram", "Time vs Log Buckets", "Time vs Num Hashes"]
+        subplot_titles=["Time vs N-gram", "Time vs Log Buckets", "Time vs Num Hashes"],
+        horizontal_spacing=0.08
     )
     
     # N-gram
@@ -1437,6 +1490,675 @@ def plot_space_usage():
         print(f"  {lb:<12} {fh_kb:<12.1f} " + " ".join([f'{kb:<12.1f}' for kb in cm_kbs]))
 
 
+def plot_parameter_sweep():
+    """
+    Plot metrics (Precision, Recall, F1, F0.5, Accuracy) vs each parameter.
+    Shows average metric for each parameter value across all other parameters.
+    """
+    print("Plotting parameter sweep results...")
+    
+    try:
+        df = pd.read_csv('parameter_sweep.csv')
+    except FileNotFoundError:
+        print("  Warning: parameter_sweep.csv not found")
+        return
+    
+    print(f"  Loaded {len(df)} parameter sweep data points")
+    
+    metrics = ['precision', 'recall', 'f1', 'f05', 'accuracy']
+    metric_labels = ['Precision', 'Recall', 'F1', 'F0.5', 'Accuracy']
+    
+    # Separate classifiers
+    df_fh = df[df['classifier'] == 'FeatureHashing']
+    df_cm = df[df['classifier'] == 'CountMin']
+    
+    # Parameters to sweep
+    params = [
+        ('ngram', 'N-gram Size', sorted(df['ngram'].unique())),
+        ('log_buckets', 'Log₂(Num Buckets)', sorted(df['log_buckets'].unique())),
+    ]
+    
+    # Add num_hashes for Count-Min only
+    if len(df_cm) > 0:
+        params.append(('num_hashes', 'Num Hashes', sorted(df_cm['num_hashes'].unique())))
+    
+    # === Matplotlib: Grid of metrics vs each parameter ===
+    for param_name, param_label, param_values in params:
+        fig, axes = plt.subplots(2, 3, figsize=(16, 10))
+        axes = axes.flatten()
+        
+        for idx, (metric, m_label) in enumerate(zip(metrics, metric_labels)):
+            ax = axes[idx]
+            
+            # Feature Hashing (skip num_hashes since FH doesn't have it)
+            if param_name != 'num_hashes' and len(df_fh) > 0:
+                fh_by_param = df_fh.groupby(param_name)[metric].agg(['mean', 'std']).reset_index()
+                ax.errorbar(fh_by_param[param_name], fh_by_param['mean'], 
+                           yerr=fh_by_param['std'], fmt='o-', capsize=4,
+                           linewidth=2, markersize=8, color='steelblue', 
+                           label='Feature Hashing')
+            
+            # Count-Min
+            if len(df_cm) > 0:
+                cm_by_param = df_cm.groupby(param_name)[metric].agg(['mean', 'std']).reset_index()
+                ax.errorbar(cm_by_param[param_name], cm_by_param['mean'],
+                           yerr=cm_by_param['std'], fmt='s--', capsize=4,
+                           linewidth=2, markersize=8, color='forestgreen',
+                           label='Count-Min')
+            
+            ax.set_xlabel(param_label)
+            ax.set_ylabel(m_label)
+            ax.set_title(f'{m_label} vs {param_label}')
+            ax.legend(loc='best')
+            ax.grid(True, alpha=0.3)
+            ax.set_xticks(param_values)
+        
+        # Hide unused subplot
+        axes[-1].set_visible(False)
+        
+        plt.tight_layout()
+        _save_png(fig, f'param_sweep_{param_name}.png')
+        print(f"  Saved: reports/param_sweep_{param_name}.png")
+    
+    # === Matplotlib: Combined plot - all metrics vs all params ===
+    fig, axes = plt.subplots(1, len(params), figsize=(6*len(params), 6))
+    if len(params) == 1:
+        axes = [axes]
+    
+    colors = plt.cm.Set1(np.linspace(0, 1, len(metrics)))
+    markers = ['o', 's', '^', 'D', 'v']
+    
+    for ax_idx, (param_name, param_label, param_values) in enumerate(params):
+        ax = axes[ax_idx]
+        
+        # Plot each metric for Feature Hashing (solid lines)
+        if param_name != 'num_hashes' and len(df_fh) > 0:
+            for m_idx, (metric, m_label) in enumerate(zip(metrics, metric_labels)):
+                fh_by_param = df_fh.groupby(param_name)[metric].mean()
+                ax.plot(fh_by_param.index, fh_by_param.values,
+                       marker=markers[m_idx], linestyle='-', linewidth=2, markersize=6,
+                       color=colors[m_idx], label=f'FH: {m_label}', alpha=0.8)
+        
+        # Plot each metric for Count-Min (dashed lines)
+        if len(df_cm) > 0:
+            for m_idx, (metric, m_label) in enumerate(zip(metrics, metric_labels)):
+                cm_by_param = df_cm.groupby(param_name)[metric].mean()
+                ax.plot(cm_by_param.index, cm_by_param.values,
+                       marker=markers[m_idx], linestyle='--', linewidth=2, markersize=6,
+                       color=colors[m_idx], label=f'CM: {m_label}', alpha=0.8)
+        
+        ax.set_xlabel(param_label)
+        ax.set_ylabel('Score')
+        ax.set_title(f'Metrics vs {param_label}')
+        ax.legend(loc='best', fontsize=7, ncol=2)
+        ax.grid(True, alpha=0.3)
+        ax.set_xticks(param_values)
+        ax.set_ylim([0.5, 1.0])
+    
+    plt.tight_layout()
+    _save_png(fig, 'param_sweep_combined.png')
+    print("  Saved: reports/param_sweep_combined.png")
+    
+    # === Plotly: Interactive subplots for each parameter ===
+    for param_name, param_label, param_values in params:
+        fig_html = make_subplots(
+            rows=2, cols=3,
+            subplot_titles=metric_labels + [''],
+            horizontal_spacing=0.08,
+            vertical_spacing=0.12
+        )
+        
+        for idx, (metric, m_label) in enumerate(zip(metrics, metric_labels)):
+            row = idx // 3 + 1
+            col = idx % 3 + 1
+            
+            # Feature Hashing
+            if param_name != 'num_hashes' and len(df_fh) > 0:
+                fh_agg = df_fh.groupby(param_name)[metric].agg(['mean', 'std']).reset_index()
+                fig_html.add_trace(
+                    go.Scatter(
+                        x=fh_agg[param_name],
+                        y=fh_agg['mean'],
+                        error_y=dict(type='data', array=fh_agg['std'], visible=True),
+                        mode='lines+markers',
+                        name='Feature Hashing',
+                        legendgroup='FH',
+                        showlegend=(idx == 0),
+                        line=dict(color='steelblue'),
+                        marker=dict(size=10)
+                    ),
+                    row=row, col=col
+                )
+            
+            # Count-Min
+            if len(df_cm) > 0:
+                cm_agg = df_cm.groupby(param_name)[metric].agg(['mean', 'std']).reset_index()
+                fig_html.add_trace(
+                    go.Scatter(
+                        x=cm_agg[param_name],
+                        y=cm_agg['mean'],
+                        error_y=dict(type='data', array=cm_agg['std'], visible=True),
+                        mode='lines+markers',
+                        name='Count-Min',
+                        legendgroup='CM',
+                        showlegend=(idx == 0),
+                        line=dict(color='forestgreen', dash='dash'),
+                        marker=dict(size=10, symbol='square')
+                    ),
+                    row=row, col=col
+                )
+            
+            fig_html.update_xaxes(title_text=param_label, row=row, col=col)
+            fig_html.update_yaxes(title_text=m_label, row=row, col=col)
+        
+        fig_html.update_layout(
+            title=f"Performance Metrics vs {param_label}"
+        )
+        _save_html(fig_html, f"param_sweep_{param_name}.html")
+        print(f"  Saved: reports/param_sweep_{param_name}.html")
+    
+    # === Plotly: Single interactive with dropdown for parameter ===
+    fig_combined = go.Figure()
+    
+    # Build traces for each parameter
+    all_traces = []
+    buttons = []
+    
+    for p_idx, (param_name, param_label, param_values) in enumerate(params):
+        param_traces = []
+        
+        for m_idx, (metric, m_label) in enumerate(zip(metrics, metric_labels)):
+            # Feature Hashing
+            if param_name != 'num_hashes' and len(df_fh) > 0:
+                fh_agg = df_fh.groupby(param_name)[metric].mean().reset_index()
+                param_traces.append(go.Scatter(
+                    x=fh_agg[param_name],
+                    y=fh_agg[metric],
+                    mode='lines+markers',
+                    name=f'FH: {m_label}',
+                    visible=(p_idx == 0),
+                    line=dict(width=2),
+                    marker=dict(size=8)
+                ))
+            
+            # Count-Min
+            if len(df_cm) > 0:
+                cm_agg = df_cm.groupby(param_name)[metric].mean().reset_index()
+                param_traces.append(go.Scatter(
+                    x=cm_agg[param_name],
+                    y=cm_agg[metric],
+                    mode='lines+markers',
+                    name=f'CM: {m_label}',
+                    visible=(p_idx == 0),
+                    line=dict(width=2, dash='dash'),
+                    marker=dict(size=8, symbol='square')
+                ))
+        
+        all_traces.extend(param_traces)
+        
+        # Calculate visibility for this parameter
+        traces_per_param = len(metrics) * (1 if param_name == 'num_hashes' else 2)
+        if param_name != 'num_hashes':
+            traces_per_param = len(metrics) * 2  # FH + CM
+        else:
+            traces_per_param = len(metrics)  # CM only
+    
+    for trace in all_traces:
+        fig_combined.add_trace(trace)
+    
+    # Calculate traces per parameter for visibility toggling
+    traces_before = 0
+    for p_idx, (param_name, param_label, param_values) in enumerate(params):
+        if param_name != 'num_hashes':
+            n_traces = len(metrics) * 2  # FH + CM for each metric
+        else:
+            n_traces = len(metrics)  # CM only
+        
+        visibility = [False] * len(all_traces)
+        for i in range(n_traces):
+            visibility[traces_before + i] = True
+        
+        buttons.append(dict(
+            label=param_label,
+            method='update',
+            args=[{'visible': visibility},
+                  {'title': f'Metrics vs {param_label}',
+                   'xaxis': {'title': param_label}}]
+        ))
+        
+        traces_before += n_traces
+    
+    fig_combined.update_layout(
+        updatemenus=[dict(
+            active=0,
+            buttons=buttons,
+            direction="down",
+            x=0.1,
+            y=1.15,
+            showactive=True,
+        )],
+        title="Metrics vs N-gram Size",
+        xaxis_title="N-gram Size",
+        yaxis_title="Score",
+        yaxis=dict(range=[0.5, 1.0])
+    )
+    _save_html(fig_combined, "param_sweep_interactive.html")
+    print("  Saved: reports/param_sweep_interactive.html")
+    
+    # Print summary
+    print("\n  === Parameter Sweep Summary ===")
+    for param_name, param_label, param_values in params:
+        print(f"\n  By {param_label}:")
+        for val in param_values:
+            fh_subset = df_fh[df_fh[param_name] == val] if param_name != 'num_hashes' else pd.DataFrame()
+            cm_subset = df_cm[df_cm[param_name] == val]
+            
+            if len(fh_subset) > 0:
+                print(f"    {param_name}={val}: FH F0.5={fh_subset['f05'].mean():.4f} "
+                      f"P={fh_subset['precision'].mean():.4f} R={fh_subset['recall'].mean():.4f}")
+            if len(cm_subset) > 0:
+                print(f"    {param_name}={val}: CM F0.5={cm_subset['f05'].mean():.4f} "
+                      f"P={cm_subset['precision'].mean():.4f} R={cm_subset['recall'].mean():.4f}")
+
+
+def plot_brier_scores():
+    """
+    Plot Brier scores and Log Loss for final configurations.
+    Lower Brier score = better calibrated probabilities.
+    """
+    print("Plotting Brier scores...")
+    
+    try:
+        df = pd.read_csv('brier_scores.csv')
+    except FileNotFoundError:
+        print("  Warning: brier_scores.csv not found")
+        return
+    
+    print(f"  Loaded {len(df)} configurations")
+    
+    # Create configuration labels
+    labels = [_config_label(row) for _, row in df.iterrows()]
+    
+    # === Matplotlib: Bar chart of Brier scores ===
+    fig, axes = plt.subplots(1, 3, figsize=(18, 6))
+    
+    colors = ['steelblue' if row['classifier'] == 'FeatureHashing' else 'forestgreen' 
+              for _, row in df.iterrows()]
+    
+    # Brier Score (lower is better)
+    ax = axes[0]
+    x = np.arange(len(labels))
+    bars = ax.bar(x, df['brier_score'], color=colors, alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
+    ax.set_ylabel('Brier Score')
+    ax.set_title('Brier Score (lower = better calibration)')
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    # Add value labels
+    for bar, val in zip(bars, df['brier_score']):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.002,
+               f'{val:.4f}', ha='center', va='bottom', fontsize=7, rotation=90)
+    
+    # Brier Skill Score (higher is better, relative to climatology)
+    ax = axes[1]
+    bars = ax.bar(x, df['brier_score_scaled'], color=colors, alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
+    ax.set_ylabel('Brier Skill Score')
+    ax.set_title('Brier Skill Score (higher = better vs baseline)')
+    ax.grid(True, alpha=0.3, axis='y')
+    ax.axhline(y=0, color='red', linestyle='--', alpha=0.5)
+    
+    for bar, val in zip(bars, df['brier_score_scaled']):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+               f'{val:.3f}', ha='center', va='bottom', fontsize=7, rotation=90)
+    
+    # Log Loss (lower is better)
+    ax = axes[2]
+    bars = ax.bar(x, df['log_loss'], color=colors, alpha=0.8)
+    ax.set_xticks(x)
+    ax.set_xticklabels(labels, rotation=45, ha='right', fontsize=8)
+    ax.set_ylabel('Log Loss')
+    ax.set_title('Log Loss (lower = better)')
+    ax.grid(True, alpha=0.3, axis='y')
+    
+    for bar, val in zip(bars, df['log_loss']):
+        ax.text(bar.get_x() + bar.get_width()/2, bar.get_height() + 0.01,
+               f'{val:.3f}', ha='center', va='bottom', fontsize=7, rotation=90)
+    
+    # Add legend
+    from matplotlib.patches import Patch
+    legend_elements = [Patch(facecolor='steelblue', alpha=0.8, label='Feature Hashing'),
+                      Patch(facecolor='forestgreen', alpha=0.8, label='Count-Min')]
+    axes[0].legend(handles=legend_elements, loc='upper right')
+    
+    plt.tight_layout()
+    _save_png(fig, 'brier_scores.png')
+    print("  Saved: reports/brier_scores.png")
+    
+    # === Plotly: Interactive bar chart ===
+    fig_html = make_subplots(
+        rows=1, cols=3,
+        subplot_titles=['Brier Score (lower=better)', 
+                       'Brier Skill Score (higher=better)',
+                       'Log Loss (lower=better)'],
+        horizontal_spacing=0.08
+    )
+    
+    # Brier Score
+    fig_html.add_trace(
+        go.Bar(
+            x=labels,
+            y=df['brier_score'],
+            marker_color=['steelblue' if c == 'FeatureHashing' else 'forestgreen' 
+                         for c in df['classifier']],
+            name='Brier Score',
+            showlegend=False,
+            hovertemplate='%{x}<br>Brier Score: %{y:.4f}<extra></extra>'
+        ),
+        row=1, col=1
+    )
+    
+    # Brier Skill Score
+    fig_html.add_trace(
+        go.Bar(
+            x=labels,
+            y=df['brier_score_scaled'],
+            marker_color=['steelblue' if c == 'FeatureHashing' else 'forestgreen' 
+                         for c in df['classifier']],
+            name='Brier Skill',
+            showlegend=False,
+            hovertemplate='%{x}<br>Brier Skill: %{y:.4f}<extra></extra>'
+        ),
+        row=1, col=2
+    )
+    
+    # Log Loss
+    fig_html.add_trace(
+        go.Bar(
+            x=labels,
+            y=df['log_loss'],
+            marker_color=['steelblue' if c == 'FeatureHashing' else 'forestgreen' 
+                         for c in df['classifier']],
+            name='Log Loss',
+            showlegend=False,
+            hovertemplate='%{x}<br>Log Loss: %{y:.4f}<extra></extra>'
+        ),
+        row=1, col=3
+    )
+    
+    fig_html.update_layout(
+        title="Probability Calibration Metrics"
+    )
+    _save_html(fig_html, "brier_scores.html")
+    print("  Saved: reports/brier_scores.html")
+    
+    # Print summary
+    print("\n  === Brier Score Summary ===")
+    print(f"  {'Configuration':<45} {'Brier':>8} {'Skill':>8} {'LogLoss':>8}")
+    print("  " + "-" * 75)
+    
+    for _, row in df.iterrows():
+        label = _config_label(row)
+        print(f"  {label:<45} {row['brier_score']:>8.4f} {row['brier_score_scaled']:>8.4f} {row['log_loss']:>8.4f}")
+    
+    # Best configurations
+    best_brier = df.loc[df['brier_score'].idxmin()]
+    best_skill = df.loc[df['brier_score_scaled'].idxmax()]
+    best_logloss = df.loc[df['log_loss'].idxmin()]
+    
+    print(f"\n  Best Brier Score: {_config_label(best_brier)} = {best_brier['brier_score']:.4f}")
+    print(f"  Best Brier Skill: {_config_label(best_skill)} = {best_skill['brier_score_scaled']:.4f}")
+    print(f"  Best Log Loss: {_config_label(best_logloss)} = {best_logloss['log_loss']:.4f}")
+
+
+def plot_metrics_vs_dimension():
+    """
+    Plot metrics (Recall@Prec95, Recall@Prec99, AUC) vs dimension (2^log_buckets).
+    Shows how performance scales with model size.
+    """
+    print("Plotting metrics vs dimension...")
+    
+    try:
+        df = pd.read_csv('cv_results.csv')
+    except FileNotFoundError:
+        print("  Warning: cv_results.csv not found")
+        return
+    
+    print(f"  Loaded {len(df)} CV data points")
+    
+    # Average across folds for each configuration
+    agg_cols = {
+        'recall_at_prec_95': 'mean',
+        'recall_at_prec_99': 'mean',
+        'auc': 'mean',
+        'recall_at_fpr_001': 'mean',
+        'recall_at_fpr_0001': 'mean'
+    }
+    if 'brier_score' in df.columns:
+        agg_cols['brier_score'] = 'mean'
+    agg_df = df.groupby(['classifier', 'ngram', 'log_buckets', 'num_hashes']).agg(agg_cols).reset_index()
+    
+    # Calculate effective dimension (number of counters)
+    # FH: 2^log_buckets, CM: num_hashes * 2^log_buckets
+    agg_df['dimension'] = np.where(
+        agg_df['classifier'] == 'FeatureHashing',
+        2 ** agg_df['log_buckets'],
+        agg_df['num_hashes'] * (2 ** agg_df['log_buckets'])
+    )
+    
+    # Also keep raw log_buckets for x-axis
+    agg_df['buckets'] = 2 ** agg_df['log_buckets']
+    
+    # Build metrics list - include Brier if available (inverted so higher is better)
+    metrics = ['recall_at_prec_95', 'recall_at_prec_99', 'auc', 'recall_at_fpr_001']
+    metric_labels = ['Recall @ Precision=0.95', 'Recall @ Precision=0.99', 'AUC', 'Recall @ FPR=0.001']
+    
+    if 'brier_score' in agg_df.columns:
+        # Create inverted brier (1 - brier) so higher is better
+        agg_df['brier_skill'] = 1 - agg_df['brier_score']
+        metrics.append('brier_skill')
+        metric_labels.append('1 - Brier Score')
+    
+    # Separate classifiers
+    df_fh = agg_df[agg_df['classifier'] == 'FeatureHashing']
+    df_cm = agg_df[agg_df['classifier'] == 'CountMin']
+    
+    # === Matplotlib: Grid of metrics vs log_buckets ===
+    n_metrics = len(metrics)
+    n_cols = 3
+    n_rows = (n_metrics + n_cols - 1) // n_cols
+    fig, axes = plt.subplots(n_rows, n_cols, figsize=(16, 5*n_rows))
+    axes = axes.flatten()
+    
+    for idx, (metric, label) in enumerate(zip(metrics, metric_labels)):
+        ax = axes[idx]
+        
+        # Feature Hashing: group by log_buckets, average across ngrams
+        if len(df_fh) > 0:
+            fh_by_lb = df_fh.groupby('log_buckets')[metric].mean()
+            ax.plot(fh_by_lb.index, fh_by_lb.values, 'o-', 
+                   linewidth=2, markersize=8, color='steelblue', label='Feature Hashing')
+            
+            # Also show individual ngram lines with transparency
+            for ng in sorted(df_fh['ngram'].unique()):
+                subset = df_fh[df_fh['ngram'] == ng].sort_values('log_buckets')
+                ax.plot(subset['log_buckets'], subset[metric], 
+                       alpha=0.3, linewidth=1, color='steelblue')
+        
+        # Count-Min: group by log_buckets, average across ngrams and num_hashes
+        if len(df_cm) > 0:
+            cm_by_lb = df_cm.groupby('log_buckets')[metric].mean()
+            ax.plot(cm_by_lb.index, cm_by_lb.values, 's--', 
+                   linewidth=2, markersize=8, color='forestgreen', label='Count-Min')
+            
+            # Individual lines
+            for ng in sorted(df_cm['ngram'].unique()):
+                for nh in sorted(df_cm['num_hashes'].unique()):
+                    subset = df_cm[(df_cm['ngram'] == ng) & (df_cm['num_hashes'] == nh)]
+                    subset = subset.sort_values('log_buckets')
+                    if len(subset) > 1:
+                        ax.plot(subset['log_buckets'], subset[metric], 
+                               alpha=0.2, linewidth=1, color='forestgreen')
+        
+        ax.set_xlabel('Log₂(Num Buckets)')
+        ax.set_ylabel(label)
+        ax.set_title(f'{label} vs Dimension')
+        ax.legend(loc='lower right')
+        ax.grid(True, alpha=0.3)
+        ax.set_ylim([0, 1])
+    
+    # Hide unused subplots
+    for idx in range(len(metrics), len(axes)):
+        axes[idx].set_visible(False)
+    
+    plt.tight_layout()
+    _save_png(fig, 'metrics_vs_dimension.png')
+    print("  Saved: reports/metrics_vs_dimension.png")
+    
+    # === Matplotlib: Single plot with all metrics ===
+    fig, ax = plt.subplots(figsize=(12, 7))
+    
+    colors = plt.cm.Set1(np.linspace(0, 1, len(metrics)))
+    markers = ['o', 's', '^', 'D']
+    
+    for i, (metric, label) in enumerate(zip(metrics, metric_labels)):
+        # Feature Hashing average
+        if len(df_fh) > 0:
+            fh_by_lb = df_fh.groupby('log_buckets')[metric].mean()
+            ax.plot(fh_by_lb.index, fh_by_lb.values, 
+                   marker=markers[i], linestyle='-', linewidth=2, markersize=8,
+                   color=colors[i], label=f'FH: {label}')
+    
+    ax.set_xlabel('Log₂(Num Buckets)')
+    ax.set_ylabel('Score')
+    ax.set_title('All Metrics vs Dimension (Feature Hashing)')
+    ax.legend(loc='lower right', fontsize=9)
+    ax.grid(True, alpha=0.3)
+    ax.set_ylim([0, 1])
+    
+    plt.tight_layout()
+    _save_png(fig, 'metrics_vs_dimension_combined.png')
+    print("  Saved: reports/metrics_vs_dimension_combined.png")
+    
+    # === Plotly: Interactive with dimension on x-axis ===
+    fig_html = go.Figure()
+    
+    # Feature Hashing traces
+    if len(df_fh) > 0:
+        for metric, label in zip(metrics, metric_labels):
+            fh_by_lb = df_fh.groupby('log_buckets')[metric].mean().reset_index()
+            fh_by_lb['buckets'] = 2 ** fh_by_lb['log_buckets']
+            
+            fig_html.add_trace(
+                go.Scatter(
+                    x=fh_by_lb['log_buckets'],
+                    y=fh_by_lb[metric],
+                    mode='lines+markers',
+                    name=f'FH: {label}',
+                    hovertemplate=f'log_buckets=%{{x}}<br>buckets=%{{customdata:,}}<br>{label}=%{{y:.4f}}',
+                    customdata=fh_by_lb['buckets']
+                )
+            )
+    
+    # Count-Min traces
+    if len(df_cm) > 0:
+        for metric, label in zip(metrics, metric_labels):
+            cm_by_lb = df_cm.groupby('log_buckets')[metric].mean().reset_index()
+            cm_by_lb['buckets'] = 2 ** cm_by_lb['log_buckets']
+            
+            fig_html.add_trace(
+                go.Scatter(
+                    x=cm_by_lb['log_buckets'],
+                    y=cm_by_lb[metric],
+                    mode='lines+markers',
+                    name=f'CM: {label}',
+                    line=dict(dash='dash'),
+                    hovertemplate=f'log_buckets=%{{x}}<br>buckets=%{{customdata:,}}<br>{label}=%{{y:.4f}}',
+                    customdata=cm_by_lb['buckets']
+                )
+            )
+    
+    fig_html.update_layout(
+        title="Metrics vs Dimension (Log₂ Num Buckets)",
+        xaxis_title="Log₂(Num Buckets)",
+        yaxis_title="Score",
+        yaxis=dict(range=[0, 1]),
+        legend=dict(font=dict(size=10))
+    )
+    _save_html(fig_html, "metrics_vs_dimension.html")
+    print("  Saved: reports/metrics_vs_dimension.html")
+    
+    # === Plotly: Subplots for each metric ===
+    fig_sub = make_subplots(
+        rows=2, cols=2,
+        subplot_titles=metric_labels,
+        horizontal_spacing=0.1,
+        vertical_spacing=0.12
+    )
+    
+    for idx, (metric, label) in enumerate(zip(metrics, metric_labels)):
+        row = idx // 2 + 1
+        col = idx % 2 + 1
+        
+        if len(df_fh) > 0:
+            fh_by_lb = df_fh.groupby('log_buckets')[metric].mean().reset_index()
+            fig_sub.add_trace(
+                go.Scatter(
+                    x=fh_by_lb['log_buckets'],
+                    y=fh_by_lb[metric],
+                    mode='lines+markers',
+                    name='Feature Hashing',
+                    legendgroup='FH',
+                    showlegend=(idx == 0),
+                    line=dict(color='steelblue'),
+                    marker=dict(size=8)
+                ),
+                row=row, col=col
+            )
+        
+        if len(df_cm) > 0:
+            cm_by_lb = df_cm.groupby('log_buckets')[metric].mean().reset_index()
+            fig_sub.add_trace(
+                go.Scatter(
+                    x=cm_by_lb['log_buckets'],
+                    y=cm_by_lb[metric],
+                    mode='lines+markers',
+                    name='Count-Min',
+                    legendgroup='CM',
+                    showlegend=(idx == 0),
+                    line=dict(color='forestgreen', dash='dash'),
+                    marker=dict(size=8, symbol='square')
+                ),
+                row=row, col=col
+            )
+        
+        fig_sub.update_xaxes(title_text="Log₂(Buckets)", row=row, col=col)
+        fig_sub.update_yaxes(title_text="Score", range=[0, 1], row=row, col=col)
+    
+    fig_sub.update_layout(
+        title="Performance Metrics vs Model Dimension"
+    )
+    _save_html(fig_sub, "metrics_vs_dimension_grid.html")
+    print("  Saved: reports/metrics_vs_dimension_grid.html")
+    
+    # Print summary
+    print("\n  === Metrics vs Dimension Summary ===")
+    for lb in sorted(agg_df['log_buckets'].unique()):
+        print(f"\n  log_buckets={int(lb)} (buckets={2**int(lb):,}):")
+        
+        fh_subset = df_fh[df_fh['log_buckets'] == lb]
+        if len(fh_subset) > 0:
+            print(f"    FH: Rec@P95={fh_subset['recall_at_prec_95'].mean():.4f}, "
+                  f"AUC={fh_subset['auc'].mean():.4f}")
+        
+        cm_subset = df_cm[df_cm['log_buckets'] == lb]
+        if len(cm_subset) > 0:
+            print(f"    CM: Rec@P95={cm_subset['recall_at_prec_95'].mean():.4f}, "
+                  f"AUC={cm_subset['auc'].mean():.4f}")
+
+
 def main():
     """
     Run all visualization functions for selected configurations.
@@ -1452,6 +2174,12 @@ def main():
     plot_cv_recall_at_precision()
     print()
     
+    plot_metrics_vs_dimension()
+    print()
+    
+    plot_parameter_sweep()
+    print()
+
     # Space and timing analysis
     plot_space_usage()
     print()
@@ -1476,6 +2204,9 @@ def main():
     print()
     
     plot_config_summary()
+    print()
+    
+    plot_brier_scores()
     
     print("\n" + "=" * 60)
     print("All visualizations complete!")
