@@ -1,0 +1,11 @@
+classifier,ngram,log_buckets,num_hashes,optimized_for,auc
+CountMin,2,20,5,AUC,0.9702448324896968
+CountMin,2,20,3,Recall@FPR=0.001,0.9688678902104894
+CountMin,2,20,2,Recall@Prec=0.99,0.967559344116437
+FeatureHashing,2,20,0,Recall@FPR=0.01,0.9659056763230797
+CountMin,1,20,4,Recall@Prec=0.95,0.964843032356072
+FeatureHashing,1,20,0,AUC,0.9639548735891021
+FeatureHashing,1,20,0,Recall@Prec=0.95,0.9639548735891021
+FeatureHashing,3,20,0,Recall@FPR=0.001,0.9509265878868454
+CountMin,3,20,5,Recall@FPR=0.01,0.9438426463964846
+FeatureHashing,2,16,0,Recall@Prec=0.99,0.9419079930332089
