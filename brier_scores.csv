@@ -1,0 +1,13 @@
+classifier,ngram,log_buckets,num_hashes,optimized_for,threshold,brier_score,brier_score_scaled,log_loss
+FeatureHashing,2,20,0,Recall@FPR=0.01,0.43,0.06827,0.713241,1.59397
+FeatureHashing,3,20,0,Recall@FPR=0.001,0.1,0.10356,0.56501,2.48993
+FeatureHashing,1,20,0,AUC,0.85,0.0599913,0.748015,1.21619
+FeatureHashing,2,16,0,Recall@Prec=0.99,0.23,0.11067,0.535146,2.07063
+FeatureHashing,1,20,0,Recall@Prec=0.95,0.85,0.0599913,0.748015,1.21619
+FeatureHashing,1,20,0,BrierScore,0.85,0.0599913,0.748015,1.21619
+CountMin,3,20,5,Recall@FPR=0.01,0.1,0.118675,0.501522,3.07415
+CountMin,2,20,3,Recall@FPR=0.001,0.3,0.0638518,0.731799,1.54264
+CountMin,2,20,5,AUC,0.45,0.0606961,0.745054,1.48749
+CountMin,2,20,2,Recall@Prec=0.99,0.25,0.0662452,0.721746,1.5828
+CountMin,1,20,4,Recall@Prec=0.95,0.85,0.0590938,0.751784,1.20995
+CountMin,1,20,5,BrierScore,0.85,0.0590707,0.751881,1.20985
